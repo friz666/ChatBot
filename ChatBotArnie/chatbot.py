@@ -1,58 +1,52 @@
 import random
 import json
-import pickle
-import numpy as np
 
-import nltk
-from nltk.stem import WordNetLemmatizer
-from tensorflow.python.keras.models import load_model
+import torch
 
-lemmatizer = WordNetLemmatizer()
-intents = json.loads(open('intents.json').read())
+from model import Neural_Network
+from nltk_utils import bag_of_words, tokenize
 
-words = pickle.load(open('words.pkl', 'rb'))
-classes = pickle.load(open('classes.pkl', 'rb'))
-model = load_model('chatbot_model.model')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def clean_up_sentence(sentence):
-    sentence_words = nltk.word_tokenize(sentence)
-    sentence_words = [lemmatizer.lemmatize(word) for word in sentence_words]
-    return sentence_words
+with open('intents.json', 'r') as json_data:
+    intents = json.load(json_data)
 
-def bag_of_words(sentence):
-    sentence_words = clean_up_sentence(sentence)
-    bag = [0] * len(words)
-    for w in sentence_words:
-        for i, word in enumerate(words):
-            if word == w:
-                bag[i] = 1
-    return np.array(bag)
+FILE = "data_trained.pth"
+data = torch.load(FILE)
 
-def predict_class(sentence):
-    bow = bag_of_words(sentence)
-    res = model.predict(np.array([bow]))[0]
-    ERROR_TRESHOLD = 0.25
-    results = [[i,r] for i,r in enumerate(res) if r > ERROR_TRESHOLD]
+input_size = data["input_size"]
+hidden_size = data["hidden_size"]
+output_size = data["output_size"]
+all_words = data['all_words']
+tags = data['tags']
+model_state = data["model_state"]
 
-    results.sort(key=lambda x: x[1], reverse=True)
-    return_list = []
-    for i in results:
-        return_list.append({'intent': classes[r[0]], 'probability': str(r[1])})
-    return return_list
+model = Neural_Network(input_size, hidden_size, output_size).to(device)
+model.load_state_dict(model_state)
+model.eval()
 
-def get_response(intents_list, intents_json):
-    tag = intents_list[0]['intent']
-    list_of_intents = intents_json['intents']
-    for i in list_of_intents:
-        if i['tag'] == tag:
-            result = random.choice(i['responses'])
-            break
-    return result
-
-print("Bot is running!")
-
+chatbot_name = "Arnie"
+print("Let's chat! (type 'stop' to exit)")
 while True:
-    message = input("")
-    ints = predict_class(message)
-    res = get_response(ints, intents)
-    print(res)
+    sentence = input("You: ")
+    if sentence == "stop":
+        break
+
+    sentence = tokenize(sentence)
+    X = bag_of_words(sentence, all_words)
+    X = X.reshape(1, X.shape[0])
+    X = torch.from_numpy(X).to(device)
+
+    output = model(X)
+    _, predicted = torch.max(output, dim=1)
+
+    tag = tags[predicted.item()]
+
+    probs = torch.softmax(output, dim=1)
+    prob = probs[0][predicted.item()]
+    if prob.item() > 0.75:
+        for intent in intents['intents']:
+            if tag == intent["tag"]:
+                print(f"{chatbot_name}: {random.choice(intent['responses'])}")
+    else:
+        print(f"{chatbot_name}: I'm not sure if I can help you...")
